@@ -2,7 +2,6 @@ import logging
 from os import path, listdir
 from shutil import rmtree
 from pathlib import Path
-from pandas import read_csv
 import numpy as np
 from datetime import datetime
 from autogluon.tabular import TabularDataset, TabularPredictor
@@ -10,7 +9,8 @@ from autogluon.tabular import TabularDataset, TabularPredictor
 
 TIMEOUT = 600
 TIME_LIMIT = None  # set = None to fully train distilled models
-LEADERBOARD = 'leaderboard_regression_1200-None.csv'
+PROBLEM_TYPE = 'regression'
+LEADERBOARD = f'leaderboard_{PROBLEM_TYPE}.csv'
 N_FOLDS = 10
 
 cur_dir = Path(path.dirname((path.realpath(__file__))))
@@ -31,9 +31,9 @@ for dataset in sorted(listdir(data_dir)):
 # for dataset in ['wine-quality-red', 'yacht']:
     logger.info('=' * 80)
     logger.info(f'Dataset: {dataset}')
+    logger.info(f'Problem type: {PROBLEM_TYPE}')
     logger.info(f'Timeout: {TIMEOUT}')
     logger.info(f'Time limit: {TIME_LIMIT}')
-    logger.info(f'Leaderboard file: {LEADERBOARD}')
     logger.info(f'Number of folds: {N_FOLDS}')
     logger.info('Loading data...')
     data = np.loadtxt(data_dir / dataset / 'data/data.txt')
@@ -52,24 +52,38 @@ for dataset in sorted(listdir(data_dir)):
         test_data = TabularDataset(data[test_indices, ])
 
         logger.info('Fitting distiller...')
-        predictor = TabularPredictor(target, problem_type='regression', eval_metric='r2', verbosity=0)
+        predictor = TabularPredictor(target, problem_type=PROBLEM_TYPE, eval_metric='r2', verbosity=0)
         predictor.fit(train_data, auto_stack=True, time_limit=TIMEOUT)
-        logger.info('Distiller is fitted')
 
-        predictor.delete_models(models_to_keep='best')
+        # predictor.delete_models(models_to_keep='best')
+        logger.info(f'Best model: {predictor.get_model_best()}')
 
         logger.info('Distilling knowledge from teacher...')
         distilled_model_names = predictor.distill(time_limit=TIME_LIMIT,
-                                                  hyperparameters={'GBM': {}, 'CAT': {}, 'XGB': {}, 'RF': {}, 'LR': {}},
                                                   teacher_preds='soft',
                                                   augment_method=None,
                                                   models_name_suffix='KNOW',
                                                   verbosity=0)
 
+        logger.info('Distilling knowledge from teacher with spunge augmentation...')
+        predictor.distill(time_limit=TIME_LIMIT,
+                        teacher_preds='hard' if PROBLEM_TYPE == 'multiclass' else 'soft',
+                        augment_method='spunge',
+                        augment_args={'size_factor': 1},
+                        verbosity=0,
+                        models_name_suffix='SPUNGE')
+
+        logger.info('Distilling knowledge from teacher with munge augmentation...')
+        predictor.distill(time_limit=TIME_LIMIT,
+                        teacher_preds='hard' if PROBLEM_TYPE == 'multiclass' else 'soft',
+                        augment_method='munge',
+                        augment_args={'size_factor': 1},
+                        verbosity=0,
+                        models_name_suffix='MUNGE')
+
         logger.info('Fitting students on true labels...')
         predictor.distill(time_limit=TIME_LIMIT,
-                          hyperparameters={'GBM': {}, 'CAT': {}, 'XGB': {}, 'RF': {}, 'LR': {}},
-                          teacher_preds=None,
+                          teacher_preds='onehot' if PROBLEM_TYPE == 'multiclass' else None,
                           models_name_suffix='BASE',
                           verbosity=0)
 
@@ -78,7 +92,9 @@ for dataset in sorted(listdir(data_dir)):
         ldr['dataset'] = dataset
         ldr['fold'] = i
         ldr['datetime'] = datetime.now()
-        ldr = ldr[['task','dataset','fold','model','score_test','score_val','pred_time_test','pred_time_val','fit_time','pred_time_test_marginal','pred_time_val_marginal','fit_time_marginal','stack_level','can_infer','fit_order', 'datetime']]
+        ldr = ldr[['task','dataset','fold','model','score_test','score_val','pred_time_test','pred_time_val',
+                   'fit_time','pred_time_test_marginal','pred_time_val_marginal','fit_time_marginal','stack_level',
+                   'can_infer','fit_order', 'datetime']]
         logger.info(ldr[['model','score_test','score_val']])
 
         ldr.to_csv(cur_dir / LEADERBOARD, mode='a', index=False, header=False)

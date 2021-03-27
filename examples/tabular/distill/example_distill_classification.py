@@ -8,9 +8,9 @@ from datetime import datetime
 from autogluon.tabular import TabularDataset, TabularPredictor
 
 
-TIMEOUT = 1200
-TIME_LIMIT = 240  # set = None to fully train distilled models
-PROBLEM_TYPE = 'multiclass'
+TIMEOUT = 600
+TIME_LIMIT = 120  # set = None to fully train distilled models
+PROBLEM_TYPE = 'binary'
 LEADERBOARD = f'leaderboard_{PROBLEM_TYPE}.csv'
 
 cur_dir = Path(path.dirname((path.realpath(__file__))))
@@ -54,7 +54,8 @@ for t in selected_tasks[PROBLEM_TYPE]:
         predictor = TabularPredictor(target, problem_type=PROBLEM_TYPE, eval_metric='accuracy', verbosity=0)
         predictor.fit(train_data, auto_stack=True, time_limit=TIMEOUT)
 
-        predictor.delete_models(models_to_keep='best')
+        # predictor.delete_models(models_to_keep='best')
+        logger.info(f'Best model: {predictor.get_model_best()}')
 
         logger.info('Distilling knowledge from teacher without augmentation...')
         distilled_model_names = predictor.distill(time_limit=TIME_LIMIT,
@@ -63,22 +64,22 @@ for t in selected_tasks[PROBLEM_TYPE]:
                                                   models_name_suffix='KNOW',
                                                   verbosity=0)
 
-        # logger.info('Distilling knowledge from teacher with spunge augmentation...')
-        # predictor.distill(time_limit=TIME_LIMIT,
-        #                   teacher_preds='soft',
-        #                   augment_method='spunge',
-        #                   augment_args={'size_factor': 1},
-        #                   verbosity=0,
-        #                   models_name_suffix='SPUNGE')
+        if PROBLEM_TYPE != 'multiclass':
+            logger.info('Distilling knowledge from teacher with spunge augmentation...')
+            predictor.distill(time_limit=TIME_LIMIT,
+                            teacher_preds='hard' if PROBLEM_TYPE == 'multiclass' else 'soft',
+                            augment_method='spunge',
+                            augment_args={'size_factor': 1},
+                            verbosity=0,
+                            models_name_suffix='SPUNGE')
 
-        logger.info('Distilling knowledge from teacher with munge augmentation...')
-        predictor.distill(time_limit=TIME_LIMIT,
-                          teacher_preds='soft',
-                          augment_method='munge',
-                          augment_args={'size_factor': 1},
-                          verbosity=0,
-                          models_name_suffix='MUNGE')
-
+            logger.info('Distilling knowledge from teacher with munge augmentation...')
+            predictor.distill(time_limit=TIME_LIMIT,
+                            teacher_preds='hard' if PROBLEM_TYPE == 'multiclass' else 'soft',
+                            augment_method='munge',
+                            augment_args={'size_factor': 1},
+                            verbosity=0,
+                            models_name_suffix='MUNGE')
 
         logger.info('Fitting students on true labels...')
         predictor.distill(time_limit=TIME_LIMIT,
